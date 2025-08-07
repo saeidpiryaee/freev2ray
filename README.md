@@ -1,27 +1,98 @@
-V2Ray Config App
 
-This Android app provides users with free V2Ray configurations for secure internet browsing. Users can earn points by watching rewarded ads and redeem these points to receive configuration details. The app also supports a QR code generator for easy configuration sharing and offers multi-language support for English and Persian.
+# Free V2Ray
 
-Features
+Free V2Ray is an open-source Android application that allows users to receive configuration data after watching rewarded ads. It is designed to be lightweight, privacy-conscious, and censorship-resistant.
 
-Free V2Ray Configurations: Retrieve configuration details directly from the app.
+---
 
-Rewarded Ads: Earn points by watching ads to unlock configurations.
+## Features
 
-Point Tracking: View your current points and required points for the next configuration.
+- Language selection at first launch (English & Persian)
+- Config access gated by rewarded ads
+- In-app notification system for server messages
+- Rate-the-app prompt after 3 app launches
+- Simple and user-friendly interface
 
-QR Code Generator: Generate and share configuration details via QR codes.
+---
 
-Multi-Language Support: Available in both English and Persian.
+## Screenshots
 
-Message Notifications: Receive important messages and notifications from the server.
 
-How It Works
 
-Earn Points: Watch rewarded ads to earn points.
+- ![Screenshot 1](screenshots/1.png)
+- ![Screenshot 2](screenshots/2.png)
+- ![Screenshot 3](screenshots/3.png)
+- ![Screenshot 4](screenshots/4.png)
 
-Check Requirements: Ensure you have enough points to unlock a configuration.
+---
 
-Retrieve Config: Redeem your points to get a configuration, displayed as text and a QR code.
+## How to Build
 
-Share Config: Copy the configuration to the clipboard or share it using the QR code.
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/kiowgarden/free-v2ray.git
+   cd free-v2ray
+   ```
+
+2. Build the debug APK:
+   ```bash
+   ./gradlew assembleDebug
+   ```
+
+GitHub Actions is already configured for automated builds.
+
+---
+
+## License
+
+This project is released under the MIT License.
+
+---
+
+# فری وی‌تو‌ری
+
+فری وی‌تو‌ری یک اپلیکیشن اندروید متن‌باز است که به کاربران اجازه می‌دهد پس از تماشای تبلیغات پاداشی، کانفیگ دریافت کنند. این اپلیکیشن سبک، ایمن، و مقاوم در برابر فیلترینگ طراحی شده است.
+
+---
+
+## ویژگی‌ها
+
+- انتخاب زبان (فارسی و انگلیسی) در اولین اجرا
+- دریافت کانفیگ با تماشای تبلیغ پاداشی
+- سیستم اعلان داخلی برای پیام‌های سرور
+- درخواست امتیاز به برنامه پس از ۳ بار اجرا
+- رابط کاربری ساده و روان
+
+---
+
+## تصاویر برنامه
+
+
+
+- ![اسکرین‌شات ۱](screenshots/1.png)
+- ![اسکرین‌شات ۲](screenshots/2.png)
+- ![اسکرین‌شات ۳](screenshots/3.png)
+- ![اسکرین‌شات ۴](screenshots/4.png)
+
+---
+
+## نحوه ساخت
+
+1. کلون کردن مخزن:
+   ```bash
+   git clone https://github.com/kiowgarden/free-v2ray.git
+   cd free-v2ray
+   ```
+
+2. ساخت فایل APK حالت دیباگ:
+   ```bash
+   ./gradlew assembleDebug
+   ```
+
+اکشن‌های گیت‌هاب برای ساخت خودکار تنظیم شده‌اند.
+
+---
+
+## مجوز
+
+این پروژه تحت مجوز MIT منتشر شده است.

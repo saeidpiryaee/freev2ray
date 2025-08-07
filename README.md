@@ -19,9 +19,7 @@ Free V2Ray is an open-source Android application that allows users to receive co
 
 
 
-- ![Screenshot 1](screenshots/1.png)
 - ![Screenshot 2](screenshots/2.png)
-- ![Screenshot 3](screenshots/3.png)
 - ![Screenshot 4](screenshots/4.png)
 
 ---
@@ -70,9 +68,7 @@ This project is released under the MIT License.
 
 
 - ![اسکرین‌شات ۱](screenshots/1.png)
-- ![اسکرین‌شات ۲](screenshots/2.png)
 - ![اسکرین‌شات ۳](screenshots/3.png)
-- ![اسکرین‌شات ۴](screenshots/4.png)
 
 ---
 

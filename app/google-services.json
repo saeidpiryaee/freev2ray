@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "173183354975",
+    "project_id": "v2rayconfig-49939",
+    "storage_bucket": "v2rayconfig-49939.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:173183354975:android:682a0205a8ea696cdcf3ea",
+        "android_client_info": {
+          "package_name": "com.pinkypromise.v2rayconfig"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB0-1H4pvqd8yI8FLQ2GM4Gb2-RVG0p9-M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

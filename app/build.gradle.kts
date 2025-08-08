@@ -5,6 +5,8 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+
+
 android {
     namespace = "com.pinkypromise.v2rayconfig"
     compileSdk = 36
@@ -41,6 +43,16 @@ android {
     buildFeatures {
         compose = true
     }
+
+    applicationVariants.all {
+        outputs.all {
+            val output = this as com.android.build.gradle.internal.api.ApkVariantOutputImpl
+            if (output.outputFile.name.endsWith(".apk")) {
+                output.outputFileName = "app-release.apk"
+            }
+        }
+    }
+
 }
 
 dependencies {

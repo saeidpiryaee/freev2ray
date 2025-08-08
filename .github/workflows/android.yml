@@ -4,13 +4,9 @@ on:
   push:
     branches:
       - master
-  pull_request:
-    branches:
-      - master
 
 jobs:
   build:
-    name: Build and Release APK
     runs-on: ubuntu-latest
 
     permissions:
@@ -26,22 +22,35 @@ jobs:
           distribution: 'temurin'
           java-version: 17
 
-      - name: Grant permission to gradlew
+      - name: Decode keystore
+        run: |
+          echo "${{ secrets.SIGNING_KEY }}" | base64 -d > keystore.jks
+
+      - name: Create signing config file
+        run: |
+          cat >> keystore.properties <<EOF
+          storeFile=keystore.jks
+          storePassword=${{ secrets.KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.SIGNING_KEY_ALIAS }}
+          keyPassword=${{ secrets.SIGNING_KEY_PASSWORD }}
+          EOF
+
+      - name: Grant gradlew permission
         run: chmod +x ./gradlew
 
-      - name: Build APK
+      - name: Build signed APK
         run: ./gradlew assembleRelease
 
-      - name: Upload APK as artifact
+      - name: Upload signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release
-          path: app/build/outputs/apk/release/*.apk
+          name: signed-app-release
+          path: app/build/outputs/apk/release/app-release.apk
 
-      - name: Create GitHub Release and attach APK
+      - name: Create GitHub Release and attach signed APK
         uses: ncipollo/release-action@v1
         with:
           tag: v1.0.${{ github.run_number }}
           name: Release v1.0.${{ github.run_number }}
-          artifacts: app/build/outputs/apk/release/*.apk
+          artifacts: app/build/outputs/apk/release/app-release.apk
           token: ${{ secrets.GITHUB_TOKEN }}

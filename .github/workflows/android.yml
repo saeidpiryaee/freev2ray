@@ -22,13 +22,13 @@ jobs:
           distribution: 'temurin'
           java-version: 17
 
-      - name: Decode keystore
+      - name: Decode keystore into app/
         run: |
-          echo "${{ secrets.SIGNING_KEY }}" | base64 -d > keystore.jks
+          echo "${{ secrets.SIGNING_KEY }}" | base64 -d > app/keystore.jks
 
-      - name: Create signing config file
+      - name: Create signing config file in app/
         run: |
-          cat >> keystore.properties <<EOF
+          cat >> app/keystore.properties <<EOF
           storeFile=keystore.jks
           storePassword=${{ secrets.KEYSTORE_PASSWORD }}
           keyAlias=${{ secrets.SIGNING_KEY_ALIAS }}

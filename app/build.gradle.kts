@@ -8,9 +8,14 @@ plugins {
     id("com.google.gms.google-services")
 }
 
-// ✅ Load keystore.properties
+// ✅ Load keystore.properties from app/ directory
 val keystoreProperties = Properties().apply {
-    load(FileInputStream(rootProject.file("keystore.properties")))
+    val file = File(rootDir, "app/keystore.properties")
+    if (file.exists()) {
+        load(FileInputStream(file))
+    } else {
+        throw GradleException("Missing keystore.properties file in app/")
+    }
 }
 
 android {
@@ -23,11 +28,9 @@ android {
         targetSdk = 36
         versionCode = 11
         versionName = "2.1"
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // ✅ Add signingConfigs
     signingConfigs {
         create("release") {
             storeFile = file("keystore.jks")
@@ -41,13 +44,10 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-
-            // ✅ Link signingConfig here
             signingConfig = signingConfigs.getByName("release")
         }
     }
@@ -56,14 +56,15 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
     kotlinOptions {
         jvmTarget = "11"
     }
+
     buildFeatures {
         compose = true
     }
 
-    // Optional: rename output to app-release.apk
     applicationVariants.all {
         outputs.all {
             val output = this as com.android.build.gradle.internal.api.ApkVariantOutputImpl
@@ -77,7 +78,6 @@ android {
 dependencies {
     implementation("com.yandex.android:mobileads:7.15.0")
     implementation("com.google.android.play:review:2.0.1")
-
     implementation(platform("com.google.firebase:firebase-bom:33.8.0"))
     implementation("com.google.firebase:firebase-messaging")
     implementation("com.google.firebase:firebase-analytics")

@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,7 +8,10 @@ plugins {
     id("com.google.gms.google-services")
 }
 
-
+// ✅ Load keystore.properties
+val keystoreProperties = Properties().apply {
+    load(FileInputStream(rootProject.file("keystore.properties")))
+}
 
 android {
     namespace = "com.pinkypromise.v2rayconfig"
@@ -21,16 +27,29 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    buildTypes {release {
-        isMinifyEnabled = true
-        isShrinkResources = true // ✅ Kotlin DSL
-
-        proguardFiles(
-            getDefaultProguardFile("proguard-android-optimize.txt"),
-            "proguard-rules.pro"
-        )
+    // ✅ Add signingConfigs
+    signingConfigs {
+        create("release") {
+            storeFile = file("keystore.jks")
+            storePassword = keystoreProperties["storePassword"] as String
+            keyAlias = keystoreProperties["keyAlias"] as String
+            keyPassword = keystoreProperties["keyPassword"] as String
+        }
     }
 
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+
+            // ✅ Link signingConfig here
+            signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     compileOptions {
@@ -44,6 +63,7 @@ android {
         compose = true
     }
 
+    // Optional: rename output to app-release.apk
     applicationVariants.all {
         outputs.all {
             val output = this as com.android.build.gradle.internal.api.ApkVariantOutputImpl
@@ -52,14 +72,11 @@ android {
             }
         }
     }
-
 }
 
 dependencies {
-
     implementation("com.yandex.android:mobileads:7.15.0")
     implementation("com.google.android.play:review:2.0.1")
-
 
     implementation(platform("com.google.firebase:firebase-bom:33.8.0"))
     implementation("com.google.firebase:firebase-messaging")
@@ -68,7 +85,6 @@ dependencies {
     implementation("com.google.zxing:core:3.4.1")
     implementation("androidx.compose.material:material-icons-extended:1.5.0")
     implementation("com.android.billingclient:billing:8.0.0")
-
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

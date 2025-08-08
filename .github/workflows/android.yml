@@ -3,34 +3,42 @@ name: Android CI
 on:
   push:
     branches:
-      - main
+      - master
   pull_request:
     branches:
-      - main
+      - master
 
 jobs:
   build:
-    name: Build Android App
+    name: Build and Release APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up JDK 17
+      - name: Set up JDK
         uses: actions/setup-java@v3
         with:
-          java-version: '17'
           distribution: 'temurin'
+          java-version: 17
 
-      - name: Grant execute permission to gradlew
+      - name: Grant permission to gradlew
         run: chmod +x ./gradlew
 
-      - name: Build Release APK
+      - name: Build APK
         run: ./gradlew assembleRelease
 
-      - name: Upload Release APK
+      - name: Upload Release APK as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk
+          name: app-release.apk
           path: app/build/outputs/apk/release/app-release.apk
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v1.0.${{ github.run_number }}
+          name: Release v1.0.${{ github.run_number }}
+          artifacts: app/build/outputs/apk/release/app-release.apk
+          token: ${{ secrets.GITHUB_TOKEN }}

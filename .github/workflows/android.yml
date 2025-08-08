@@ -13,6 +13,9 @@ jobs:
     name: Build and Release APK
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -29,16 +32,16 @@ jobs:
       - name: Build APK
         run: ./gradlew assembleRelease
 
-      - name: Upload Release APK as Artifact
+      - name: Upload APK as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-release.apk
-          path: app/build/outputs/apk/release/app-release.apk
+          name: app-release
+          path: app/build/outputs/apk/release/*.apk
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release and attach APK
         uses: ncipollo/release-action@v1
         with:
           tag: v1.0.${{ github.run_number }}
           name: Release v1.0.${{ github.run_number }}
-          artifacts: app/build/outputs/apk/release/app-release.apk
+          artifacts: app/build/outputs/apk/release/*.apk
           token: ${{ secrets.GITHUB_TOKEN }}

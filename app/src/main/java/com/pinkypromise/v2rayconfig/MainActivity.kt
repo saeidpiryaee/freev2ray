@@ -79,6 +79,9 @@ import com.google.android.play.core.review.ReviewManager
 import com.google.android.play.core.review.ReviewManagerFactory
 import kotlinx.coroutines.delay
 
+import androidx.annotation.RequiresApi
+import kotlinx.coroutines.isActive
+
 
 data class ShowMessageResponse(val show: Boolean, val message: String)
 class MyApp : Application() {
@@ -114,6 +117,13 @@ class MainActivity : ComponentActivity() {
     private var appOpenAdLoader: AppOpenAdLoader? = null
     private var currentScoreState: MutableState<Int>? = null
     private var hiddenConfig: String? = null
+    private var rewardPollJob: kotlinx.coroutines.Job? = null
+
+    private var inviteRewardCountState: MutableState<Int>? = null
+    private var showInviteRewardDialogState: MutableState<Boolean>? = null
+
+
+
 
 
 
@@ -129,7 +139,9 @@ class MainActivity : ComponentActivity() {
                 if (connection.responseCode == HttpURLConnection.HTTP_OK) {
                     val encoded = connection.inputStream.bufferedReader().readText().trim()
                     val decodedBytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
-                    String(decodedBytes)
+                    val raw = String(decodedBytes).trim()
+                    // IMPORTANT: return the value (you weren’t returning anything before)
+                    raw.removeSuffix("/")
                 } else {
                     null
                 }
@@ -139,6 +151,32 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+
+    private suspend fun registerInviterOwner() {
+        withContext(Dispatchers.IO) {
+            try {
+                val payload = """{"code":"${inviterCode()}","device":"${deviceId()}"}"""
+                val url = URL("$serverUrl/register_inviter")
+                val c = (url.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                    requestMethod = "POST"
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                }
+                c.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+                val body = (if (c.responseCode in 200..299) c.inputStream else c.errorStream)
+                    ?.bufferedReader()?.readText() ?: ""
+                Log.d("InviteRegister", "owner bind: HTTP ${c.responseCode} body: $body")
+            } catch (e: Exception) {
+                Log.e("InviteRegister", "owner bind failed", e)
+            }
+        }
+    }
+
+
+
 
 
     private fun launchReviewFlow() {
@@ -163,12 +201,37 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         sharedPreferences = getSharedPreferences("UserPrefs", Context.MODE_PRIVATE)
+        // Read language early for multilingual toasts
+        val bootLanguage = sharedPreferences.getString("language", "en") ?: "en"
+
+// Handle deep links (vless:// or ss://)
+        intent?.data?.let { uri ->
+            val link = uri.toString()
+            if (link.startsWith("vless://") || link.startsWith("ss://")) {
+                sharedPreferences.edit().putString("hiddenConfig", link).apply()
+                val msg = if (bootLanguage == "fa") "کانفیگ از لینک وارد شد" else "Config imported from link"
+                Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+            }
+        }
+
         val launchCount = sharedPreferences.getInt("launchCount", 0) + 1
         sharedPreferences.edit().putInt("launchCount", launchCount).apply()
+
+        val langFirst = sharedPreferences.getString("language", "en") ?: "en"
+        val firstRun = sharedPreferences.getBoolean("firstRun", true)
+        if (firstRun) {
+            userScore += 1
+            saveUserScore(userScore)
+            sharedPreferences.edit().putBoolean("firstRun", false).apply()
+            val msg = if (langFirst == "fa") "هدیه خوش‌آمدگویی: +۱ امتیاز" else "Welcome bonus: +1 point"
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+        }
+
 
 
         hiddenConfig = sharedPreferences.getString("hiddenConfig", null)
@@ -184,6 +247,9 @@ class MainActivity : ComponentActivity() {
             val remoteUrl = fetchRemoteServerUrl()
             if (remoteUrl != null) {
                 serverUrl = remoteUrl
+                // 1) bind inviter ownership immediately
+                registerInviterOwner()
+                // 2) preload message
                 showMessageFromServer = fetchShowMessage()
                 serverUrlReady.value = true
             } else {
@@ -195,11 +261,18 @@ class MainActivity : ComponentActivity() {
 
 
 
+
+
+
         setContent {
             // Show loading UI until serverUrl and message are ready
             val serverInitialized = remember { mutableStateOf(false) }
             val messageResponse = remember { mutableStateOf<ShowMessageResponse?>(null) }
             val showRatingDialog = remember { mutableStateOf(false) }
+
+
+            val showInviteDialog = remember { mutableStateOf(false) }
+
 
             LaunchedEffect(Unit) {
                 val hasRated = sharedPreferences.getBoolean("hasRated", false)
@@ -219,18 +292,7 @@ class MainActivity : ComponentActivity() {
             }
 
 
-            // Load server URL and message onceee
-            LaunchedEffect(Unit) {
-                val remoteUrl = fetchRemoteServerUrl()
-                if (remoteUrl != null) {
-                    serverUrl = remoteUrl
-                    val result = fetchShowMessage()
-                    messageResponse.value = result
-                } else {
-                    Toast.makeText(this@MainActivity, "Failed to load config server", Toast.LENGTH_LONG).show()
-                }
-                serverInitialized.value = true
-            }
+
 
             // Show loading spinner until ready
             if (!serverInitialized.value) {
@@ -243,7 +305,32 @@ class MainActivity : ComponentActivity() {
             // After initialized
             val scoreState = remember { mutableStateOf(userScore) }
             currentScoreState = scoreState
+            val inviteRewardCount = remember {
+                mutableStateOf(sharedPreferences.getInt("pendingInviteRewardCount", 0))
+            }
+            val showInviteRewardDialog = remember { mutableStateOf(inviteRewardCount.value > 0) }
+
+// Bridge these to MainActivity so non-Compose code can trigger UI
+            this@MainActivity.inviteRewardCountState = inviteRewardCount
+            this@MainActivity.showInviteRewardDialogState = showInviteRewardDialog
+
+
+            LaunchedEffect(Unit) {
+                val pts = pollInviterRewards() ?: 0
+                if (pts > 0) applyPointsDelta(pts)
+            }
+
             var currentScore by scoreState
+
+            // If any points arrived before UI was ready, deliver them now and clear the buffer
+            LaunchedEffect(Unit) {
+                val buffered = sharedPreferences.getInt("pendingInvitePts", 0)
+                if (buffered > 0) {
+                    sharedPreferences.edit().putInt("pendingInvitePts", 0).apply()
+                    applyPointsDelta(buffered)
+                }
+            }
+
 
             var isAdAvailable by remember { mutableStateOf(rewardedAd != null) }
             var serverThreshold by remember { mutableStateOf(0) }
@@ -284,6 +371,12 @@ class MainActivity : ComponentActivity() {
                     language = language,
                     onAllow = {
                         requestNotificationPermissionIfNeeded()
+
+
+
+
+
+
                         sharedPreferences.edit().putBoolean("shouldAskNotification", false).apply()
                         showNotificationPromptDialog = false
                     },
@@ -310,24 +403,42 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
+            if (showInviteRewardDialog.value && inviteRewardCount.value > 0) {
+                InviteRewardDialog(
+                    language = language,
+                    points = inviteRewardCount.value,
+                    onDismiss = {
+                        // Show only once: clear persisted counter and close dialog
+                        sharedPreferences.edit().putInt("pendingInviteRewardCount", 0).apply()
+                        inviteRewardCount.value = 0
+                        showInviteRewardDialog.value = false
+                    }
+                )
+            }
+
+
 
 
 
             AppContent(
                 currentScore = currentScore,
                 config = config,
-                onReceiveConfig = {
-                    coroutineScope.launch {
+                onReceiveConfigAndTellMeIfGotIt = {
+                    var success = false
+                    try {
                         serverThreshold = fetchServerThreshold() ?: 0
                         if (currentScore >= serverThreshold) {
                             val fetched = fetchConfig()
                             if (fetched != null) {
                                 config = fetched
                                 currentScore -= serverThreshold
-                                userScore = currentScore // <--- ADD THIS LINE
+                                userScore = currentScore
                                 saveUserScore(currentScore)
                                 currentScoreState?.value = currentScore
-
+                                success = true
+                            } else {
+                                val m = if (language == "fa") "خطا در دریافت کانفیگ" else "Failed to fetch config"
+                                Toast.makeText(this@MainActivity, m, Toast.LENGTH_SHORT).show()
                             }
                         } else {
                             val adsLeft = (serverThreshold - currentScore).coerceAtLeast(1)
@@ -338,7 +449,11 @@ class MainActivity : ComponentActivity() {
                             }
                             Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
                         }
+                    } catch (e: Exception) {
+                        val m = if (language == "fa") "مشکل ارتباط با سرور" else "Server connection problem"
+                        Toast.makeText(this@MainActivity, m, Toast.LENGTH_SHORT).show()
                     }
+                    success
                 },
                 onShowAd = {
                     if (rewardedAd != null) showRewardedAd()
@@ -378,8 +493,169 @@ class MainActivity : ComponentActivity() {
                     clipboard.setPrimaryClip(ClipData.newPlainText("Config", it))
                     Toast.makeText(this@MainActivity, if (language == "fa") "کپی شد!" else "Copied!", Toast.LENGTH_SHORT).show()
                 },
-                bannerHeight = null
+                bannerHeight = null,
+
+
+
+                onShareApp = {
+                    val shareText = if (language == "fa")
+                        "با این اپ سریع کانفیگ بگیر و وارد کن (QR و لینک). دانلود از گوگل‌پلی:\nhttps://play.google.com/store/apps/details?id=$packageName"
+                    else
+                        "Get and import configs fast (QR & links) with this app. Play Store:\nhttps://play.google.com/store/apps/details?id=$packageName"
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, shareText)
+                    }
+                    startActivity(Intent.createChooser(intent, if (language == "fa") "اشتراک‌گذاری" else "Share"))
+                },
+                onOpenInviteDialog = {
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        try {
+                            val payload = """{"code":"${inviterCode()}","device":"${deviceId()}"}"""
+                            val url = URL("$serverUrl/register_inviter")
+                            val c = (url.openConnection() as HttpURLConnection).apply {
+                                connectTimeout = 8000
+                                readTimeout = 8000
+                                requestMethod = "POST"
+                                doOutput = true
+                                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                            }
+                            c.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+                            val body = (if (c.responseCode in 200..299) c.inputStream else c.errorStream)
+                                ?.bufferedReader()?.readText() ?: ""
+                            Log.d("InviteRegister", "HTTP ${c.responseCode} body: $body")
+
+                            // ignore body, open dialog anyway
+                        } catch (_: Exception) { /* ignore */ }
+                        withContext(Dispatchers.Main) { showInviteDialog.value = true }
+
+                        // After opening the dialog, try to pull any pending inviter rewards too
+                        lifecycleScope.launch {
+                            val pts = pollInviterRewards() ?: 0
+                            if (pts > 0) applyPointsDelta(pts)
+                        }
+
+
+                    }
+                },
+
+
+
+                dailyAvailable = isDailyBonusAvailable(),
+                onClaimDaily = {
+                    if (isDailyBonusAvailable()) {
+                        userScore += 1
+                        saveUserScore(userScore)
+                        currentScoreState?.value = userScore
+                        markDailyBonusClaimed()
+                        val msg = if (language == "fa") "جایزه روزانه +۱ اضافه شد" else "Daily bonus +1 added"
+                        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                    } else {
+                        val msg = if (language == "fa") "امروز قبلاً دریافت شده" else "Already claimed today"
+                        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+
+
+
+
             )
+
+
+            // Invite dialog
+            if (showInviteDialog.value) {
+                InviteDialog(
+                    language = language,
+                    yourCode = inviterCode(),
+                    onDismiss = { showInviteDialog.value = false },
+                    onRedeem = { enteredCode ->
+                        val code = enteredCode.trim().uppercase()
+                        if (code.length != 8 || !code.all { it in "0123456789ABCDEF" }) {
+                            val m = if (language == "fa")
+                                "کد باید ۸ کاراکتر هگزادسیمال باشد (0-9, A-F)"
+                            else
+                                "Code must be 8 hex characters (0-9, A-F)"
+                            Toast.makeText(this@MainActivity, m, Toast.LENGTH_LONG).show()
+                            return@InviteDialog   // ⬅️ stay inside the dialog’s onRedeem lambda
+                        }
+                        if (code.isEmpty()) {
+                            val msg = if (language == "fa") "کد دعوت را وارد کنید" else "Enter an invite code"
+                            Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+                            return@InviteDialog
+                        }
+                        // Network call
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            try {
+                                val url = URL("$serverUrl/redeem_invite?inviter=${java.net.URLEncoder.encode(code, "UTF-8")}&device=${java.net.URLEncoder.encode(deviceId(), "UTF-8")}")
+                                Log.d("InviteRedeem", "GET $url")   // ✅ see the final URL in Logcat
+
+                                val c = (url.openConnection() as HttpURLConnection).apply {
+                                    connectTimeout = 8000
+                                    readTimeout = 8000
+                                    requestMethod = "GET"
+                                }
+                                c.connect()
+                                val stream = if (c.responseCode in 200..299) c.inputStream else c.errorStream
+                                val body = stream?.bufferedReader()?.readText() ?: ""
+
+
+                                // 🔍 Debug log — see exactly what the server sent back
+                                Log.d("InviteRedeem", "HTTP ${c.responseCode} body: $body")
+
+// 🛠 Parse JSON safely (you already imported org.json.JSONObject at top)
+                                val json = try { JSONObject(body) } catch (_: Exception) { null }
+                                val ok = json?.optBoolean("ok") ?: false
+                                val inviteePoints = json?.optInt("invitee_points", 0) ?: 0
+                                val reason = json?.optString("reason", "") ?: ""
+
+// Switch to main thread for UI updates
+                                withContext(Dispatchers.Main) {
+                                    if (ok && inviteePoints > 0) {
+                                        userScore += inviteePoints
+                                        saveUserScore(userScore)
+                                        currentScoreState?.value = userScore
+                                        val msg = if (language == "fa")
+                                            "کد دعوت پذیرفته شد: +$inviteePoints"
+                                        else
+                                            "Invite code accepted: +$inviteePoints"
+                                        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                                        showInviteDialog.value = false
+                                    } else {
+                                        val friendly = when (reason) {
+                                            "self_redeem_forbidden" ->
+                                                if (language == "fa") "نمی‌توانید کد خودتان را وارد کنید" else "You can’t redeem your own code"
+                                            "already_redeemed" ->
+                                                if (language == "fa") "این دستگاه قبلاً کدی را وارد کرده است" else "This device already redeemed a code"
+                                            "invalid_code_format" ->
+                                                if (language == "fa") "فرمت کد نامعتبر است (۸ کاراکتر هگز)" else "Invalid code format (8 hex)"
+                                            "inviter_daily_limit" ->
+                                                if (language == "fa") "امروز ظرفیت دعوت‌کننده پر شده است" else "Inviter’s daily limit reached"
+                                            "ip_daily_limit" ->
+                                                if (language == "fa") "محدودیت روزانه IP پر شده است" else "IP daily limit reached"
+                                            "missing_params", "invalid_params" ->
+                                                if (language == "fa") "پارامترهای نامعتبر" else "Invalid parameters"
+                                            else ->
+                                                if (language == "fa") "کد نامعتبر یا خطای سرور" else "Invalid code or server error"
+                                        }
+                                        Toast.makeText(this@MainActivity, friendly, Toast.LENGTH_LONG).show()
+                                    }
+                                }
+
+                            } catch (e: Exception) {
+                                withContext(Dispatchers.Main) {
+                                    val msg = if (language == "fa") "اتصال برقرار نشد. بعداً دوباره تلاش کنید." else "Couldn’t connect. Try again later."
+                                    Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                    }
+                )
+            }
+
+
+
+
         }
 
 
@@ -388,8 +664,40 @@ class MainActivity : ComponentActivity() {
             override fun onStart(owner: LifecycleOwner) {
                 super.onStart(owner)
                 showAppOpenAd()
+
+                // one immediate poll
+                lifecycleScope.launch {
+                    val pts = pollInviterRewards() ?: 0
+                    if (pts > 0) {
+                        val lang = sharedPreferences.getString("language", "en") ?: "en"
+                        applyPointsDelta(pts, lang)
+                    }
+                }
+
+                // start periodic polling while in foreground
+                rewardPollJob?.cancel()
+                rewardPollJob = lifecycleScope.launch {
+                    while (isActive) {
+                        try {
+                            val pts = pollInviterRewards() ?: 0
+                            if (pts > 0) {
+                                val lang = sharedPreferences.getString("language", "en") ?: "en"
+                                applyPointsDelta(pts, lang)
+                            }
+                        } catch (_: Exception) { }
+                        delay(30_000) // every 30s
+                    }
+                }
+            }
+
+            override fun onStop(owner: LifecycleOwner) {
+                super.onStop(owner)
+                rewardPollJob?.cancel()
+                rewardPollJob = null
             }
         })
+
+
 
 
 
@@ -503,6 +811,34 @@ class MainActivity : ComponentActivity() {
         sharedPreferences.edit().putInt("userScore", score).apply()
     }
 
+    // Apply points to the score and UI if ready; otherwise buffer in SharedPreferences.
+    private fun applyPointsDelta(pts: Int, langOverride: String? = null) {
+        if (pts <= 0) return
+        userScore += pts
+        saveUserScore(userScore)
+
+        // 1) Always accumulate a persistent, one-time counter
+        val pending = sharedPreferences.getInt("pendingInviteRewardCount", 0) + pts
+        sharedPreferences.edit().putInt("pendingInviteRewardCount", pending).apply()
+
+        // 2) Update UI score if screen mounted
+        if (currentScoreState != null) {
+            currentScoreState?.value = userScore
+            val l = langOverride ?: (sharedPreferences.getString("language", "en") ?: "en")
+            val msg = if (l == "fa") "امتیاز دعوت‌ها: +$pts" else "Invite rewards: +$pts"
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+        } else {
+            // If UI wasn’t ready, we no longer need the old pendingInvitePts buffer
+            // (you can keep it if you want, but the new dialog uses pendingInviteRewardCount)
+        }
+
+        // 3) If Compose is active, tell it to show the dialog now
+        inviteRewardCountState?.let { it.value = pending }
+        showInviteRewardDialogState?.let { it.value = true }
+    }
+
+
+
     private fun saveLanguagePreference(language: String) {
         sharedPreferences.edit().putString("language", language).apply()
     }
@@ -578,6 +914,32 @@ class MainActivity : ComponentActivity() {
     }
 
 
+    private suspend fun pollInviterRewards(): Int? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = URL("$serverUrl/poll_rewards?device=${java.net.URLEncoder.encode(deviceId(), "UTF-8")}")
+                val c = (url.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                    requestMethod = "GET"
+                }
+                c.connect()
+                val stream = if (c.responseCode in 200..299) c.inputStream else c.errorStream
+                val body = stream?.bufferedReader()?.readText() ?: ""
+                Log.d("InvitePoll", "HTTP ${c.responseCode} body: $body")
+                val json = try { JSONObject(body) } catch (_: Exception) { null }
+                if (json?.optBoolean("ok") == true) {
+                    json.optInt("points", 0)
+                } else null
+            } catch (e: Exception) {
+                Log.e("InvitePoll", "poll failed", e)
+                null
+            }
+        }
+    }
+
+
+
 
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -586,6 +948,54 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+
+    // -------- Daily Bonus Helpers --------
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun todayStr(): String = try {
+        java.time.LocalDate.now().toString()
+    } catch (e: Throwable) {
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun isDailyBonusAvailable(): Boolean {
+        val last = sharedPreferences.getString("lastClaimDay", null)
+        return last != todayStr()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun markDailyBonusClaimed() {
+        sharedPreferences.edit().putString("lastClaimDay", todayStr()).apply()
+    }
+
+    // -------- Invite Helpers --------
+    private fun sha256Hex(input: String): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val bytes = md.digest(input.toByteArray(Charsets.UTF_8))
+        val sb = StringBuilder(bytes.size * 2)
+        for (b in bytes) sb.append(String.format("%02x", b))
+        return sb.toString()
+    }
+
+    // Stable, URL-safe, reinstall-resistant for same user + signing key
+    private fun deviceId(): String {
+        val raw = android.provider.Settings.Secure.getString(
+            contentResolver,
+            android.provider.Settings.Secure.ANDROID_ID
+        ) ?: "unknown-device"
+        // Salt with packageName so codes can't collide across different apps
+        val base = "$raw:${packageName}"
+        // 32 hex chars (128-bit) is plenty and URL-safe
+        return sha256Hex(base).take(32)
+    }
+
+    // Short, human-typeable invite code (8 hex, uppercase)
+    private fun inviterCode(): String {
+        return deviceId().take(8).uppercase()
+    }
+
+
 
 
 }
@@ -604,6 +1014,9 @@ fun LanguageSelectionDialog(onSelect: (String) -> Unit) {
             Column(modifier = Modifier.padding(20.dp)) {
                 Text("Choose your language / زبان خود را انتخاب کنید", fontSize = 16.sp)
                 Spacer(modifier = Modifier.height(16.dp))
+
+
+
                 Button(onClick = { onSelect("fa") }, modifier = Modifier.fillMaxWidth()) {
                     Text("🇮🇷 فارسی")
                 }
@@ -673,7 +1086,7 @@ fun NotificationPermissionPrompt(
 fun AppContent(
     currentScore: Int,
     config: String?,
-    onReceiveConfig: suspend () -> Unit,
+    onReceiveConfigAndTellMeIfGotIt: suspend () -> Boolean,
     onShowAd: () -> Unit,
     onRetryAdCache: () -> Unit,
     isAdAvailable: Boolean,
@@ -686,8 +1099,19 @@ fun AppContent(
     language: String,
     onLanguageChange: (String) -> Unit,
     onCopyConfig: (String) -> Unit,
-    bannerHeight: Int?
-) {
+    bannerHeight: Int?,
+    // NEW:
+
+    onShareApp: () -> Unit,
+    onOpenInviteDialog: () -> Unit,
+    dailyAvailable: Boolean,
+    onClaimDaily: () -> Unit
+)
+
+
+
+
+{
     val context = LocalContext.current
 
     val configLoading = remember { mutableStateOf(false) }
@@ -793,19 +1217,66 @@ fun AppContent(
                     MessageDialog(messageText, onDismissMessage)
                 }
                 Spacer(modifier = Modifier.height(16.dp))
-                Button(
-                    onClick = {
-                        configLoading.value = true  // ✅ Trigger spinner before coroutine
-                        coroutineScope.launch {
-                            onReceiveConfig()
-                            delay(300)
-                            configLoading.value = false
-                            scrollState.animateScrollTo(scrollState.maxValue)
+
+
+                // --- Daily Bonus Card ---
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            text = if (language == "fa") "جایزه روزانه 🎁" else "Daily Bonus 🎁",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = if (language == "fa")
+                                "هر روز می‌توانید +۱ امتیاز بگیرید و سریع‌تر کانفیگ دریافت کنید."
+                            else
+                                "Claim +1 point every day to reach config faster.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Button(
+                            onClick = onClaimDaily,
+                            enabled = dailyAvailable,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (dailyAvailable) Color(0xFF6A1B9A) else Color(0xFF757575),
+                                contentColor = Color.White
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                if (dailyAvailable)
+                                    (if (language == "fa") "گرفتن +۱ امروز" else "Claim today’s +1")
+                                else
+                                    (if (language == "fa") "امروز گرفته شد" else "Already claimed today")
+                            )
                         }
                     }
-                    ,
-                    enabled = !configLoading.value,
+                }
+                Spacer(modifier = Modifier.height(16.dp))
 
+
+
+                Button(
+                    onClick = {
+                        configLoading.value = true  // start spinner
+                        coroutineScope.launch {
+                            val gotConfig = onReceiveConfigAndTellMeIfGotIt()
+                            configLoading.value = false  // stop spinner when work is done
+                            if (gotConfig) {
+                                // let UI render the new config, then scroll down to it
+                                delay(150)
+                                scrollState.animateScrollTo(scrollState.maxValue)
+                            }
+                        }
+                    },
+                    enabled = !configLoading.value,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color(0xFF408EC6),
                         contentColor = Color.White
@@ -822,10 +1293,10 @@ fun AppContent(
                             strokeWidth = 2.dp
                         )
                     } else {
-                        Text(receiveConfigText)
+                        Text(if (language == "fa") "دریافت کانفیگ 📥" else "Receive Config 📥")
                     }
-
                 }
+
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
                     onClick = { onShowAd() },
@@ -860,7 +1331,14 @@ fun AppContent(
                         }
                     }
                 }
+
+
+
                 Spacer(modifier = Modifier.height(8.dp))
+
+
+
+
                 Button(
                     onClick = { onRetryAdCache() },
                     colors = ButtonDefaults.buttonColors(
@@ -896,6 +1374,58 @@ fun AppContent(
                     )
                 }
                 Spacer(modifier = Modifier.height(32.dp))
+
+                // --- Share App Button ---
+                Button(
+                    onClick = onShareApp,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF1E88E5),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp)
+                ) {
+                    Text(if (language == "fa") "اشتراک‌گذاری برنامه 🔗" else "Share the App 🔗")
+                }
+                Text(
+                    text = if (language == "fa")
+                        "دوستان‌تان را دعوت کنید؛ هرچه کاربران بیشتر، انگیزه ما برای انتشار سریع‌تر کانفیگ‌ها بیشتر!"
+                    else
+                        "Invite friends—more users means quicker, more frequent config releases!",
+                    style = MaterialTheme.typography.bodySmall.copy(color = Color.White),
+                    modifier = Modifier.padding(top = 6.dp, start = 8.dp, end = 8.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // --- Invite & Earn Button ---
+                Button(
+                    onClick = onOpenInviteDialog,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFFF8F00),
+                        contentColor = Color.Black
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp)
+                ) {
+                    Text(if (language == "fa") "دعوت دوستان و امتیاز 🎁" else "Invite & Earn 🎁")
+                }
+                Text(
+                    text = if (language == "fa")
+                        "کد دوست‌تان را وارد کنید تا +۱ امتیاز بگیرید. کد خودتان را هم برای دوستان ارسال کنید!"
+                    else
+                        "Enter a friend’s code to get +1 point. Share your code so they can earn too!",
+                    style = MaterialTheme.typography.bodySmall.copy(color = Color.White),
+                    modifier = Modifier.padding(top = 6.dp, start = 8.dp, end = 8.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+
+
+
                 config?.let {
                     Text(
                         text = it,
@@ -1032,6 +1562,153 @@ fun RatingPromptDialog(
         }
     }
 }
+
+
+@Composable
+fun InviteRewardDialog(
+    language: String,
+    points: Int,
+    onDismiss: () -> Unit
+) {
+    val title = if (language == "fa") "تبریک! 🎉" else "Congrats! 🎉"
+    val msg = if (language == "fa")
+        "به خاطر دعوت دوستان، +$points امتیاز گرفتید."
+    else
+        "You received +$points points from your invitations."
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(16.dp)) {
+            Column(
+                Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(12.dp))
+                Text(msg, fontSize = 16.sp, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = onDismiss,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (language == "fa") "باشه" else "OK")
+                }
+            }
+        }
+    }
+}
+
+
+
+@Composable
+fun InviteDialog(
+    language: String,
+    yourCode: String,
+    onDismiss: () -> Unit,
+    onRedeem: (String) -> Unit
+) {
+    var entered by remember { mutableStateOf("") }
+    val ctx = LocalContext.current
+    fun t(en: String, fa: String) = if (language == "fa") fa else en
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Column(Modifier.padding(16.dp)) {
+
+                // --- BIG PRIMARY on top: Redeem ---
+                OutlinedTextField(
+                    value = entered,
+                    onValueChange = { entered = it },
+                    label = { Text(t("Enter friend’s code", "کد دوست‌تان را وارد کنید")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(10.dp))
+                Button(
+                    onClick = { onRedeem(entered) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text(t("Redeem", "دریافت امتیاز"))
+                }
+
+                Spacer(Modifier.height(18.dp))
+
+                // --- Your code row with small Copy button ---
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = t("Your code:", "کد شما:"),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(end = 6.dp)
+                    )
+                    Text(
+                        text = yourCode,
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = {
+                            val clip = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clip.setPrimaryClip(ClipData.newPlainText("InviteCode", yourCode))
+                            Toast.makeText(ctx, t("Copied", "کپی شد"), Toast.LENGTH_SHORT).show()
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(t("Copy", "کپی"))
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = t(
+                        "Share this code with friends. They enter it to get points.",
+                        "این کد را برای دوستان ارسال کنید. آنها با وارد کردن کد امتیاز می‌گیرند."
+                    ),
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                // --- Secondary: Share my code ---
+                OutlinedButton(
+                    onClick = {
+                        val shareText = if (language == "fa")
+                            "کد من برای دریافت امتیاز: $yourCode\nدانلود اپ:\nhttps://play.google.com/store/apps/details?id=${ctx.packageName}"
+                        else
+                            "My invite code: $yourCode\nGet the app:\nhttps://play.google.com/store/apps/details?id=${ctx.packageName}"
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, shareText)
+                        }
+                        ctx.startActivity(Intent.createChooser(intent, t("Share", "اشتراک‌گذاری")))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text(t("Share My Code", "اشتراک‌گذاری کد من"))
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // --- Tertiary: Close ---
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(t("Close", "بستن"))
+                }
+            }
+        }
+    }
+}
+
+
+
+
 
 
 fun generateQRCode(text: String): Bitmap? {

@@ -84,6 +84,8 @@ import kotlinx.coroutines.isActive
 
 
 data class ShowMessageResponse(val show: Boolean, val message: String)
+
+data class InviteInfo(val inviteePoints: Int, val inviterPoints: Int)
 class MyApp : Application() {
     override fun onCreate() {
         super.onCreate()
@@ -94,6 +96,10 @@ class MyApp : Application() {
 
 
 }
+
+
+
+
 
 class MainActivity : ComponentActivity() {
     private val TAG = "MainActivity"
@@ -151,6 +157,10 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+
+
+
 
 
     private suspend fun registerInviterOwner() {
@@ -275,6 +285,9 @@ class MainActivity : ComponentActivity() {
 
             val showAlreadyRedeemedDialog = remember { mutableStateOf(false) }
 
+            val inviteInfo = remember { mutableStateOf<InviteInfo?>(null) }
+
+
 
 
             LaunchedEffect(Unit) {
@@ -293,6 +306,15 @@ class MainActivity : ComponentActivity() {
                 }
                 serverInitialized.value = true
             }
+
+
+            LaunchedEffect(serverInitialized.value) {
+                if (serverInitialized.value) {
+                    val info = fetchInviteInfo()
+                    inviteInfo.value = info
+                }
+            }
+
 
 
 
@@ -354,6 +376,42 @@ class MainActivity : ComponentActivity() {
             }
 
             var language by remember { mutableStateOf(sharedPreferences.getString("language", "en") ?: "en") }
+
+
+            val inviteLine = remember(language, inviteInfo.value) {
+                val ii = inviteInfo.value
+                val hasInvitee = (ii?.inviteePoints ?: 0) > 0
+                val hasInviter = (ii?.inviterPoints ?: 0) > 0
+
+                if (hasInvitee && hasInviter) {
+                    if (language == "fa") {
+                        "کد دوست‌تان را وارد کنید تا +${ii!!.inviteePoints} امتیاز بگیرید. " +
+                                "کد خودتان را با دوستان به اشتراک بگذارید تا هر کدام +${ii.inviterPoints} امتیاز بگیرید!"
+                    } else {
+                        "Enter a friend’s code to get +${ii!!.inviteePoints} points. " +
+                                "Share your code so you and your friends get +${ii.inviterPoints} points each!"
+                    }
+                } else if (hasInvitee) {
+                    if (language == "fa")
+                        "کد دوست‌تان را وارد کنید تا +${ii!!.inviteePoints} امتیاز بگیرید."
+                    else
+                        "Enter a friend’s code to get +${ii!!.inviteePoints} points."
+                } else if (hasInviter) {
+                    if (language == "fa")
+                        "کد خود را با دوستان به اشتراک بگذارید تا هر نفر +${ii!!.inviterPoints} امتیاز بگیرد!"
+                    else
+                        "Share your code so each friend gives you +${ii!!.inviterPoints} points!"
+                } else {
+                    if (language == "fa")
+                        "کد دوست‌تان را وارد کنید تا امتیاز بگیرید. کد خودتان را هم برای دوستان ارسال کنید!"
+                    else
+                        "Enter a friend’s code to earn points. Share your code so they can earn too!"
+                }
+            }
+
+
+
+
             var showLanguageDialog by remember { mutableStateOf(!sharedPreferences.getBoolean("languageSelected", false)) }
             var showNotificationPromptDialog by remember { mutableStateOf(false) }
 
@@ -557,7 +615,9 @@ class MainActivity : ComponentActivity() {
                         val msg = if (language == "fa") "امروز قبلاً دریافت شده" else "Already claimed today"
                         Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
                     }
-                }
+                },
+
+                        inviteLine = inviteLine
 
 
 
@@ -961,6 +1021,49 @@ class MainActivity : ComponentActivity() {
     }
 
 
+    private suspend fun fetchInviteInfo(): InviteInfo? {
+        return withContext(Dispatchers.IO) {
+            try {
+                val url = URL("$serverUrl/invite_info")
+                val c = (url.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                    requestMethod = "GET"
+                }
+                c.connect()
+                val body = (if (c.responseCode in 200..299) c.inputStream else c.errorStream)
+                    ?.bufferedReader()?.readText().orEmpty()
+                Log.d("InviteInfo", "HTTP ${c.responseCode} body: $body")
+
+                if (c.responseCode !in 200..299) return@withContext null
+
+                // Be tolerant to different field names / types
+                val j = JSONObject(body)
+                val invitee = when {
+                    j.has("invitee_points") -> j.optInt("invitee_points", 0)
+                    j.has("invitee") -> j.optInt("invitee", 0)
+                    j.has("friend_points") -> j.optInt("friend_points", 0)
+                    else -> 0
+                }
+                val inviter = when {
+                    j.has("inviter_points") -> j.optInt("inviter_points", 0)
+                    j.has("inviter") -> j.optInt("inviter", 0)
+                    j.has("self_points") -> j.optInt("self_points", 0)
+                    else -> 0
+                }
+
+                Log.d("InviteInfo", "parsed invitee=$invitee inviter=$inviter")
+                InviteInfo(inviteePoints = invitee, inviterPoints = inviter)
+            } catch (e: Exception) {
+                Log.e("InviteInfo", "Failed to fetch/parse invite_info", e)
+                null
+            }
+        }
+    }
+
+
+
+
     private suspend fun pollInviterRewards(): Int? {
         return withContext(Dispatchers.IO) {
             try {
@@ -1152,7 +1255,9 @@ fun AppContent(
     onShareApp: () -> Unit,
     onOpenInviteDialog: () -> Unit,
     dailyAvailable: Boolean,
-    onClaimDaily: () -> Unit
+    onClaimDaily: () -> Unit,
+    inviteLine: String
+
 )
 
 
@@ -1460,15 +1565,38 @@ fun AppContent(
                 ) {
                     Text(if (language == "fa") "دعوت دوستان و امتیاز 🎁" else "Invite & Earn 🎁")
                 }
+
+
+
                 Text(
-                    text = if (language == "fa")
-                        "کد دوست‌تان را وارد کنید تا +۱ امتیاز بگیرید. کد خودتان را هم برای دوستان ارسال کنید!"
-                    else
-                        "Enter a friend’s code to get +1 point. Share your code so they can earn too!",
+                    text = inviteLine,
                     style = MaterialTheme.typography.bodySmall.copy(color = Color.White),
                     modifier = Modifier.padding(top = 6.dp, start = 8.dp, end = 8.dp)
                 )
+
                 Spacer(modifier = Modifier.height(8.dp))
+
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            text = if (language == "fa") "امتیاز فعلی: $currentScore" else "Current Score: $currentScore",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = if (language == "fa")
+                                "حداقل امتیاز لازم: $serverThreshold"
+                            else
+                                "Minimum Required Score: $serverThreshold",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
 
 
 
@@ -1516,18 +1644,9 @@ fun AppContent(
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = currentScoreText,
-                    style = MaterialTheme.typography.bodyMedium.copy(color = Color.White),
-                    modifier = Modifier.padding(8.dp)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = serverThresholdText,
-                    style = MaterialTheme.typography.bodyMedium.copy(color = Color.White),
-                    modifier = Modifier.padding(8.dp)
-                )
-            }
+
+
+             }
         }
     )
 }

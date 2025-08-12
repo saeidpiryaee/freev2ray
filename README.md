@@ -4,6 +4,11 @@
 Free V2Ray is an open-source Android application that allows users to receive configuration data after watching rewarded ads. It is designed to be lightweight, privacy-conscious, and censorship-resistant.
 
 ---
+# How to get
+
+Google Play link : https://play.google.com/store/apps/details?id=com.pinkypromise.v2rayconfig
+
+
 
 ## Features
 
@@ -52,6 +57,11 @@ This project is released under the MIT License.
 فری وی‌تو‌ری یک اپلیکیشن اندروید متن‌باز است که به کاربران اجازه می‌دهد پس از تماشای تبلیغات پاداشی، کانفیگ دریافت کنند. این اپلیکیشن سبک، ایمن، و مقاوم در برابر فیلترینگ طراحی شده است.
 
 ---
+
+# دریافت برنامه
+
+  گوگل پلی :
+  https://play.google.com/store/apps/details?id=com.pinkypromise.v2rayconfig
 
 ## ویژگی‌ها
 

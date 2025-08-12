@@ -273,6 +273,9 @@ class MainActivity : ComponentActivity() {
 
             val showInviteDialog = remember { mutableStateOf(false) }
 
+            val showAlreadyRedeemedDialog = remember { mutableStateOf(false) }
+
+
 
             LaunchedEffect(Unit) {
                 val hasRated = sharedPreferences.getBoolean("hasRated", false)
@@ -602,6 +605,12 @@ class MainActivity : ComponentActivity() {
 
                                 // 🔍 Debug log — see exactly what the server sent back
                                 Log.d("InviteRedeem", "HTTP ${c.responseCode} body: $body")
+                                // quick parse for debugging
+                                try {
+                                    val dbg = JSONObject(body)
+                                    Log.d("InviteRedeem", "reason(raw)=${dbg.optString("reason")}")
+                                } catch (_: Exception) { }
+
 
 // 🛠 Parse JSON safely (you already imported org.json.JSONObject at top)
                                 val json = try { JSONObject(body) } catch (_: Exception) { null }
@@ -622,11 +631,22 @@ class MainActivity : ComponentActivity() {
                                         Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
                                         showInviteDialog.value = false
                                     } else {
+                                        // Normalize reason to catch variations like "already-redeemed", "already redeemed", "already_entered"
+                                        val norm = reason.lowercase().replace("_", "").replace("-", "").replace(" ", "")
+
+                                        if (
+                                            norm.contains("already") &&
+                                            (norm.contains("redeem") || norm.contains("enter") || norm.contains("used"))
+                                        ) {
+                                            // Close input dialog and show popup. No toast.
+                                            showInviteDialog.value = false
+                                            showAlreadyRedeemedDialog.value = true
+                                            return@withContext
+                                        }
+
                                         val friendly = when (reason) {
                                             "self_redeem_forbidden" ->
                                                 if (language == "fa") "نمی‌توانید کد خودتان را وارد کنید" else "You can’t redeem your own code"
-                                            "already_redeemed" ->
-                                                if (language == "fa") "این دستگاه قبلاً کدی را وارد کرده است" else "This device already redeemed a code"
                                             "invalid_code_format" ->
                                                 if (language == "fa") "فرمت کد نامعتبر است (۸ کاراکتر هگز)" else "Invalid code format (8 hex)"
                                             "inviter_daily_limit" ->
@@ -638,8 +658,12 @@ class MainActivity : ComponentActivity() {
                                             else ->
                                                 if (language == "fa") "کد نامعتبر یا خطای سرور" else "Invalid code or server error"
                                         }
+
                                         Toast.makeText(this@MainActivity, friendly, Toast.LENGTH_LONG).show()
                                     }
+
+
+
                                 }
 
                             } catch (e: Exception) {
@@ -652,6 +676,29 @@ class MainActivity : ComponentActivity() {
                     }
                 )
             }
+
+
+            // Show "already redeemed" info dialog (opened from onRedeem handler)
+            if (showAlreadyRedeemedDialog.value) {
+                AlreadyRedeemedDialog(
+                    language = language,
+                    yourCode = inviterCode(),
+                    onShareMyCode = {
+                        val ctx = this@MainActivity
+                        val shareText = if (language == "fa")
+                            "کد من برای دریافت امتیاز: ${inviterCode()}\nدانلود اپ:\nhttps://play.google.com/store/apps/details?id=$packageName"
+                        else
+                            "My invite code: ${inviterCode()}\nGet the app:\nhttps://play.google.com/store/apps/details?id=$packageName"
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, shareText)
+                        }
+                        startActivity(Intent.createChooser(intent, if (language == "fa") "اشتراک‌گذاری" else "Share"))
+                    },
+                    onDismiss = { showAlreadyRedeemedDialog.value = false }
+                )
+            }
+
 
 
 
@@ -1597,6 +1644,69 @@ fun InviteRewardDialog(
         }
     }
 }
+
+
+
+
+@Composable
+fun AlreadyRedeemedDialog(
+    language: String,
+    yourCode: String,
+    onShareMyCode: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val title = if (language == "fa") "کد قبلاً استفاده شده" else "Code Already Used"
+    val msg = if (language == "fa")
+        "این دستگاه یک‌بار کد دعوت وارد کرده است، اما هنوز هم می‌توانید با دادن کد خود به دوستان جدید امتیاز بگیرید."
+    else
+        "This device has already entered a code once, but you can still earn rewards by sharing your code with new friends."
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(16.dp)) {
+            Column(
+                Modifier.padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(12.dp))
+                Text(msg, fontSize = 15.sp, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(16.dp))
+
+                // your code row + copy
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = if (language == "fa") "کد شما:" else "Your code:",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = yourCode,
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(Modifier.height(14.dp))
+                Button(
+                    onClick = onShareMyCode,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text(if (language == "fa") "اشتراک‌گذاری کد من" else "Share My Code")
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text(if (language == "fa") "باشه" else "OK")
+                }
+            }
+        }
+    }
+}
+
 
 
 
